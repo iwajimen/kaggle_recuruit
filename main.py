@@ -10,7 +10,9 @@ from datetime import date, timedelta
 from sklearn.preprocessing import LabelEncoder
 
 
-data_path = '../data/'
+#data_path = '../data/'
+
+data_path = r'C:\Users\kotax\OneDrive\Documents\GitHub\recruit\kaggle_recuruit\data\\'
 
 air_reserve = pd.read_csv(data_path + 'air_reserve.csv').rename(columns={'air_store_id':'store_id'})
 hpg_reserve = pd.read_csv(data_path + 'hpg_reserve.csv').rename(columns={'hpg_store_id':'store_id'})
@@ -35,6 +37,7 @@ hpg_store['store_id'] = hpg_store['store_id'].map(store_id_map['air_store_id']).
 hpg_store.rename(columns={'hpg_genre_name':'air_genre_name','hpg_area_name':'air_area_name'},inplace=True)
 data = pd.concat([air_visit, submission]).copy()
 data['dow'] = pd.to_datetime(data['visit_date']).dt.dayofweek
+#土日＋休日はholiday_flg2で
 date_info['holiday_flg2'] = pd.to_datetime(date_info['visit_date']).dt.dayofweek
 date_info['holiday_flg2'] = ((date_info['holiday_flg2']>4) | (date_info['holiday_flg']==1)).astype(int)
 
@@ -43,6 +46,7 @@ lbl = LabelEncoder()
 air_store['air_genre_name'] = lbl.fit_transform(air_store['air_genre_name'])
 air_store['air_area_name0'] = lbl.fit_transform(air_store['air_area_name0'])
 
+#対数？？？底をeとするdata['visitors']+1の対数
 data['visitors'] = np.log1p(data['visitors'])
 data = data.merge(air_store,on='store_id',how='left')
 data = data.merge(date_info[['visit_date','holiday_flg','holiday_flg2']], on=['visit_date'],how='left')
@@ -89,6 +93,7 @@ def get_label(end_date,n_day):
     label['diff_of_day'] = label['visit_date'].apply(lambda x: diff_of_days(x,end_date))
     label['month'] = label['visit_date'].str[5:7].astype(int)
     label['year'] = label['visit_date'].str[:4].astype(int)
+    #基準日の１日前と３日後　連休とかを割り出そうとしている？
     for i in [3,2,1,-1]:
         date_info_temp = date_info.copy()
         date_info_temp['visit_date'] = date_info_temp['visit_date'].apply(lambda x: date_add_days(x,i))
@@ -97,7 +102,7 @@ def get_label(end_date,n_day):
     label = label.reset_index(drop=True)
     return label
 
-
+#指定した日付の統計量をとる(storeID毎)　日付のレンジ毎に列作ってる　56，28，14、1000
 def get_store_visitor_feat(label, key, n_day):
     start_date = date_add_days(key[0],-n_day)
     data_temp = data[(data.visit_date < key[0]) & (data.visit_date > start_date)].copy()
@@ -111,22 +116,26 @@ def get_store_visitor_feat(label, key, n_day):
     result = left_merge(label, result, on=['store_id']).fillna(0)
     return result
 
-
+#直近の日付の客の入りから重みづけ？　n_dayが1000なのはどうして？不可能では
 def get_store_exp_visitor_feat(label, key, n_day):
     start_date = date_add_days(key[0], -n_day)
     data_temp = data[(data.visit_date < key[0]) & (data.visit_date > start_date)].copy()
     data_temp['visit_date'] = data_temp['visit_date'].apply(lambda x: diff_of_days(key[0],x))
+    #基準日から離れるほど重みが軽くなる？
     data_temp['weight'] = data_temp['visit_date'].apply(lambda x: 0.985**x)
+    #集客数に重みをかける
     data_temp['visitors'] = data_temp['visitors'] * data_temp['weight']
+    #重みづけの方法がよくわからない
     result1 = data_temp.groupby(['store_id'], as_index=False)['visitors'].agg({'store_exp_mean{}'.format(n_day): 'sum'})
     result2 = data_temp.groupby(['store_id'], as_index=False)['weight'].agg({'store_exp_weight_sum{}'.format(n_day): 'sum'})
     result = result1.merge(result2, on=['store_id'], how='left')
+    #store_exp_meanの算出　集客数（一定期間の）を重みの合計で割ってる
     result['store_exp_mean{}'.format(n_day)] = result['store_exp_mean{}'.format(n_day)]/result['store_exp_weight_sum{}'.format(n_day)]
     result = left_merge(label, result, on=['store_id']).fillna(0)
     return result
 
 
-
+#指定した日付の統計量をとる(storeID毎、曜日ごと)
 def get_store_week_feat(label, key, n_day):
     start_date = date_add_days(key[0], -n_day)
     data_temp = data[(data.visit_date < key[0]) & (data.visit_date > start_date)].copy()
@@ -198,6 +207,7 @@ def get_store_week_exp_feat(label, key, n_day):
     return result
 
 
+#指定した日付の統計量をとる(storeID毎、曜日ごと)（休暇シーズン）
 def get_store_holiday_feat(label, key, n_day):
     start_date = date_add_days(key[0], -n_day)
     data_temp = data[(data.visit_date < key[0]) & (data.visit_date > start_date)].copy()
@@ -210,6 +220,7 @@ def get_store_holiday_feat(label, key, n_day):
          'store_holiday_std{}'.format(n_day): 'std',
          'store_holiday_skew{}'.format(n_day): 'skew'})
     result1 = left_merge(label, result1, on=['store_id', 'holiday_flg']).fillna(0)
+    #土日含む
     result2 = data_temp.groupby(['store_id', 'holiday_flg2'], as_index=False)['visitors'].agg(
         {'store_holiday2_min{}'.format(n_day): 'min',
          'store_holiday2_mean{}'.format(n_day): 'mean',
@@ -284,8 +295,8 @@ def get_first_last_time(label, key, n_day):
     start_date = date_add_days(key[0], -n_day)
     data_temp = data[(data.visit_date < key[0]) & (data.visit_date > start_date)].copy()
     data_temp = data_temp.sort_values('visit_date')
-    result = data_temp.groupby('store_id')['visit_date'].agg({'first_time':lambda x: diff_of_days(key[0],np.min(x)),
-                                                              'last_time':lambda x: diff_of_days(key[0],np.max(x)),})
+    result = data_temp.groupby('store_id')['visit_date'].agg(first_time = lambda x: diff_of_days(key[0],np.min(x)),
+                                                              last_time = lambda x: diff_of_days(key[0],np.max(x)),)
     result = left_merge(label, result, on=['store_id']).fillna(0)
     return result
 
@@ -299,28 +310,28 @@ def get_reserve_feat(label,key):
     air_reserve_temp['diff_time'] = (pd.to_datetime(air_reserve['visit_datetime'])-pd.to_datetime(air_reserve['reserve_datetime'])).dt.days
     air_reserve_temp = air_reserve_temp.merge(air_store,on='store_id')
     air_result = air_reserve_temp.groupby(['store_id', 'visit_date'])['reserve_visitors'].agg(
-        {'air_reserve_visitors': 'sum',
-         'air_reserve_count': 'count'})
+        air_reserve_visitors='sum',
+         air_reserve_count= 'count')
     air_store_diff_time_mean = air_reserve_temp.groupby(['store_id', 'visit_date'])['diff_time'].agg(
-        {'air_store_diff_time_mean': 'mean'})
+        air_store_diff_time_mean= 'mean')
     air_diff_time_mean = air_reserve_temp.groupby(['visit_date'])['diff_time'].agg(
-        {'air_diff_time_mean': 'mean'})
+        air_diff_time_mean= 'mean')
     air_result = air_result.unstack().fillna(0).stack()
-    air_date_result = air_reserve_temp.groupby(['visit_date'])['reserve_visitors'].agg({
-        'air_date_visitors': 'sum',
-        'air_date_count': 'count'})
+    air_date_result = air_reserve_temp.groupby(['visit_date'])['reserve_visitors'].agg(
+        air_date_visitors= 'sum',
+        air_date_count= 'count')
     hpg_reserve_temp = hpg_reserve[(hpg_reserve.visit_date >= key[0]) & (hpg_reserve.visit_date < label_end_date) & (hpg_reserve.reserve_date < key[0])].copy()
     hpg_reserve_temp['diff_time'] = (pd.to_datetime(hpg_reserve['visit_datetime']) - pd.to_datetime(hpg_reserve['reserve_datetime'])).dt.days
-    hpg_result = hpg_reserve_temp.groupby(['store_id', 'visit_date'])['reserve_visitors'].agg({'hpg_reserve_visitors': 'sum',
-                                                                                               'hpg_reserve_count': 'count'})
+    hpg_result = hpg_reserve_temp.groupby(['store_id', 'visit_date'])['reserve_visitors'].agg(hpg_reserve_visitors= 'sum',
+                                                                                               hpg_reserve_count='count')
     hpg_result = hpg_result.unstack().fillna(0).stack()
-    hpg_date_result = hpg_reserve_temp.groupby(['visit_date'])['reserve_visitors'].agg({
-        'hpg_date_visitors': 'sum',
-        'hpg_date_count': 'count'})
+    hpg_date_result = hpg_reserve_temp.groupby(['visit_date'])['reserve_visitors'].agg(
+        hpg_date_visitors='sum',
+        hpg_date_count= 'count')
     hpg_store_diff_time_mean = hpg_reserve_temp.groupby(['store_id', 'visit_date'])['diff_time'].agg(
-        {'hpg_store_diff_time_mean': 'mean'})
+        hpg_store_diff_time_mean= 'mean')
     hpg_diff_time_mean = hpg_reserve_temp.groupby(['visit_date'])['diff_time'].agg(
-        {'hpg_diff_time_mean': 'mean'})
+        hpg_diff_time_mean= 'mean')
     air_result = left_merge(label, air_result, on=['store_id','visit_date']).fillna(0)
     air_store_diff_time_mean = left_merge(label, air_store_diff_time_mean, on=['store_id', 'visit_date']).fillna(0)
     hpg_result = left_merge(label, hpg_result, on=['store_id', 'visit_date']).fillna(0)
